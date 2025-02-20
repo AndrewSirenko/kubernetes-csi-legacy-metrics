@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"k8s.io/component-base/metrics/legacyregistry"
 	"net/http"
 	"os"
 	"strings"
@@ -53,6 +54,8 @@ import (
 	"k8s.io/component-base/logs"
 	logsapi "k8s.io/component-base/logs/api/v1"
 	_ "k8s.io/component-base/logs/json/register"
+	_ "k8s.io/component-base/metrics/prometheus/clientgo/leaderelection" // register leader election in the default legacy registry
+	_ "k8s.io/component-base/metrics/prometheus/workqueue"               // register work queues in the default legacy registry
 )
 
 var (
@@ -176,6 +179,10 @@ func main() {
 		csiClient.CloseConnection()
 		csiClient = migratedCsiClient
 	}
+
+	// Add legacyregistry to include Go runtime and process metrics.
+	// Also adds workqueue and leader election metrics by anonymously importing associated "k8s.io/component-base/metrics/prometheus/" packages
+	metricsManager.WithAdditionalRegistry(legacyregistry.DefaultGatherer)
 
 	csiResizer, err := resizer.NewResizerFromClient(
 		csiClient,
