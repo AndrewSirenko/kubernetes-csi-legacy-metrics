@@ -19,6 +19,7 @@ package metrics
 import (
 	"bufio"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
 	"net/http"
 	"net/http/pprof"
 	"sort"
@@ -90,6 +91,8 @@ type CSIMetricsManager interface {
 	// HaveAdditionalLabel can be used to check if the additional label
 	// value is defined in the metrics manager
 	HaveAdditionalLabel(name string) bool
+	
+	WithAdditionalRegistry(registry prometheus.Gatherer) CSIMetricsManager
 
 	// SetDriverName is called to update the CSI driver name. This should be done
 	// as soon as possible, otherwise metrics recorded by this manager will be
@@ -242,11 +245,6 @@ func NewCSIMetricsManagerWithOptions(driverName string, options ...MetricsManage
 		// https://github.com/open-telemetry/opentelemetry-collector/issues/969
 		// Add process_start_time_seconds into the metric to let the start time be parsed correctly
 		metrics.RegisterProcessStartTime(cmm.registry.Register)
-		// TODO: This is a bug in component-base library. We need to remove this after upgrade component-base dependency
-		// BugFix: https://github.com/kubernetes/kubernetes/pull/96435
-		// The first call to RegisterProcessStartTime can only create the metric, so we need a second call to actually
-		// register the metric.
-		metrics.RegisterProcessStartTime(cmm.registry.Register)
 	}
 
 	labels := []string{labelCSIDriverName, labelCSIOperationName, labelGrpcStatusCode}
@@ -266,6 +264,9 @@ func NewCSIMetricsManagerWithOptions(driverName string, options ...MetricsManage
 	)
 	cmm.SetDriverName(driverName)
 	cmm.registerMetrics()
+	cmm.gatherers = prometheus.Gatherers{
+		cmm.GetRegistry(),
+	}
 	return &cmm
 }
 
@@ -278,6 +279,7 @@ type csiMetricsManager struct {
 	driverName                 string
 	additionalLabelNames       []string
 	additionalLabels           []label
+	gatherers                  prometheus.Gatherers
 	csiOperationsLatencyMetric *metrics.HistogramVec
 	registerProcessStartTime   bool
 }
@@ -367,6 +369,12 @@ func (cmm *csiMetricsManager) HaveAdditionalLabel(name string) bool {
 	return false
 }
 
+// WithAdditionalRegistry FIXME
+func (cmm *csiMetricsManager) WithAdditionalRegistry(registry prometheus.Gatherer) CSIMetricsManager {
+	cmm.gatherers = append(cmm.gatherers, registry)
+	return cmm
+}
+
 // RecordMetrics passes the stored values as to the implementation.
 func (cmmv *csiMetricsManagerWithValues) RecordMetrics(
 	operationName string,
@@ -390,7 +398,7 @@ func (cmm *csiMetricsManager) SetDriverName(driverName string) {
 // given server at the specified address/path.
 func (cmm *csiMetricsManager) RegisterToServer(s Server, metricsPath string) {
 	s.Handle(metricsPath, metrics.HandlerFor(
-		cmm.GetRegistry(),
+		cmm.gatherers,
 		metrics.HandlerOpts{
 			ErrorHandling: metrics.ContinueOnError}))
 }
